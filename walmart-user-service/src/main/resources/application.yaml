@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: walmart-user-service
+  datasource:
+    password: ${mysql.password}
+    #Six_6g123  10.176.122.78:32561
+    url: ${mysql.url}
+    driver-class-name: ${mysql.driver-class-name}
+    username: ${mysql.username}
+    #six
+
+  jpa:
+    hibernate:
+      ddl-auto: update  #更新或自动建立数据表结构
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    generate-ddl: true
+  sql:
+    init:
+      schema-locations:
+        - classpath:/schema/user_schema.sql
+        - classpath:/schema/roleaccess_schema.sql
+      data-locations:
+        - classpath:/table/admin.sql
+        - classpath:/table/roleaccess.sql
+      password: ${mysql.password}
+      #Six_6g123
+      username: ${mysql.username}
+      #six
+      platform: mysql
+      mode: always
+
+server:
+  port: ${USER_SERVICE_PORT}  #8680暂时改为8679，躲避端口冲突
+
+# mybatis-plus设置
+mybatis-plus:
+  mapper-locations: classpath*:com/gitee/sunchenbin/mybatis/actable/mapping/*/*.xml
+
+# actable的配置信息
+#actable:
+#  table:
+#    auto: update
+#  model:
+#    pack: com.walmart_6g.walmartUserService.entity
+#  database:
+#    type: mysql
+#actable.index.prefix=自己定义的索引前缀#该配置项不设置默认使用actable_idx_
+#actable.unique.prefix=自己定义的唯一约束前缀#该配置项不设置默认使用actable_uni_
+
+

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-gateway-service
+  labels:
+    app: walmart-gateway-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-gateway-service
+  template:
+    metadata:
+      labels:
+        app: walmart-gateway-service
+    spec:
+      containers:
+        - name: walmart-gateway-service
+          image: meixie/walmart-gateway:0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-gateway-service
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 32002
+  selector:
+    app: walmart-gateway-service

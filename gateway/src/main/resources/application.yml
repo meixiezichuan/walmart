@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: gateway
+  datasource:
+    password: ${mysql.password}
+    url: ${mysql.url}
+    driver-class-name: ${mysql.driver-class-name}
+    username: ${mysql.username}
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: user-service
+          uri: lb://walmart-user-service
+          predicates:
+            - Path=/user/**
+          filters:
+            - RewritePath=/user(?<segment>/?.*), /api/v1/user/$\{segment}
+        - id: goods-service
+          uri: lb://walmart-goods-service
+          predicates:
+            - Path=/goods/**
+          filters:
+            - RewritePath=/goods(?<segment>/?.*), /api/v1/goods/$\{segment}
+        - id: order-service
+          uri: lb://walmart-order-service
+          predicates:
+            - Path=/order/**
+          filters:
+            - RewritePath=/order(?<segment>/?.*), /api/v1/order/$\{segment}
+        - id: store-service
+          uri: lb://walmart-goods-service
+          predicates:
+            - Path=/store/**
+          filters:
+            - RewritePath=/store(?<segment>/?.*), /api/v1/store/$\{segment}
+        - id: cart-serevice
+          uri: lb://walmart-cart-service
+          predicates:
+            - Path=/cart/**
+          filters:
+            - RewritePath=/cart(?<segment>/?.*), /api/v1/cart/$\{segment}
+        - id: wallet-serevice
+          uri: lb://walmart-wallet-service
+          predicates:
+            - Path=/wallet/**
+          filters:
+            - RewritePath=/wallet(?<segment>/?.*), /api/v1/wallet/$\{segment}
+        - id: notification-serevice
+          uri: lb://walmart-notification-service
+          predicates:
+            - Path=/notification/**
+          filters:
+            - RewritePath=/notification(?<segment>/?.*), /api/v1/notification/$\{segment}
+        - id: logistics-serevice
+          uri: lb://walmart-logistics-service
+          predicates:
+            - Path=/logistics_company/**
+          filters:
+            - RewritePath=/logistics_company(?<segment>/?.*), /api/v1/logistics_company/$\{segment}
+  main:
+    web-application-type: reactive
+server:
+  port: ${server.port}
+eureka:
+  client:
+    eureka-server-u-r-l-context: ${eureka.client.serviceUrl.defaultZone}
+s      defaultZone: ${eureka.client.serviceUrl.defaultZone}
+
+# mybatis-plus设置
+mybatis-plus:
+  mapper-locations: classpath:Mapper/*.xml  #mapper.xml文件位置，如果没有映射文件，请注释掉。

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC
+        "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.walmart_6g.walmartOrderService.mapper.SubOrderMapper">
+    <select id="findSortedSubOrdersByOrdersId" parameterType="hashmap" resultType="java.util.Map">
+        select sub_order.id as id,
+               orders.create_time as create_time,
+               sub_order.address_id as address_id,
+               sub_order.status as status,
+               sub_order.total_price as total_price,
+               sub_order.store_id as store_id,
+               sub_order.logistics_company_id as logistics_company_id
+        from sub_order inner join orders on sub_order.order_id = orders.id
+        where sub_order.order_id in
+        <foreach collection="orderIds" item="orderId" separator="," open="(" close=")">
+            #{orderId}
+        </foreach>
+        and sub_order.deprecated = false
+        <if test="status!=0">
+            and sub_order.status=#{status}
+        </if>
+        order by create_time desc
+        limit #{start}, #{end}
+    </select>
+</mapper>

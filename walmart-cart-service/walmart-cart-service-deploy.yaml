@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-cart-service
+  labels:
+    app: walmart-cart-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-cart-service
+  template:
+    metadata:
+      labels:
+        app: walmart-cart-service
+    spec:
+      containers:
+        - name: walmart-cart-service
+          image: meixie/walmart-cart-service:0.0.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-cart-config
+          ports:
+            - containerPort: 8684
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-cart-service
+spec:
+  ports:
+    - port: 8684
+      targetPort: 8684
+  selector:
+    app: walmart-cart-service

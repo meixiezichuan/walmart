@@ -1,0 +1,2680 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rabbitmq-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels:
+    app: rabbitmq
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:management
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5672
+              name: port-5672
+            - containerPort: 15672
+              name: port-15672
+          env:
+            - name: RABBITMQ_DEFAULT_VHOST
+              value: my_vhost
+            - name: RABBITMQ_DEFAULT_USER
+              value: admin
+            - name: RABBITMQ_DEFAULT_PASS
+              value: admin
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 200Mi
+          volumeMounts:
+            - name: pvc-data
+              mountPath: /var/lib/rabbitmq
+      volumes:
+        - name: pvc-data
+          persistentVolumeClaim:
+            claimName: rabbitmq-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  type: NodePort
+  ports:
+    - port: 5672
+      name: port-5672
+      targetPort: 5672
+      protocol: TCP
+      nodePort: 32003
+    - port: 15672
+      name: port-15672
+      targetPort: 15672
+      protocol: TCP
+      nodePort: 32004
+  selector:
+    app: rabbitmq
+
+
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-cart-rdb-${i}.walmart-cart-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-cart-rdb-${i}.walmart-cart-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+roleRef:
+  kind: Role
+  name: walmart-cart-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-cart-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-cart-rdb
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+spec:
+  ports:
+    - name: walmart-cart-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-cart-rdb
+    release: "walmart-cart"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-cart-rdb-leader
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-cart-rdb
+    release: "walmart-cart"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-cart-rdb-follower
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-cart-rdb
+    release: "walmart-cart"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-cart-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-cart-rdb
+    chart: rdb-1.0.0
+    release: "walmart-cart"
+
+
+spec:
+  serviceName: walmart-cart-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-cart-rdb
+      release: walmart-cart
+  template:
+    metadata:
+      labels:
+        app: walmart-cart-rdb
+        release: walmart-cart
+        role: candidate
+      annotations:
+        checksum/config: 0754c7dc9e509c70f0b5482cc0f7e0f42f2137d13543db7a0cb9ae551f2c6bc6
+    spec:
+      serviceAccountName: walmart-cart-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-cart-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-cart-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-cart-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-cart-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-cart-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-goods-rdb-${i}.walmart-goods-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-goods-rdb-${i}.walmart-goods-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+roleRef:
+  kind: Role
+  name: walmart-goods-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-goods-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-goods-rdb
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+spec:
+  ports:
+    - name: walmart-goods-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-goods-rdb
+    release: "walmart-goods"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-goods-rdb-leader
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-goods-rdb
+    release: "walmart-goods"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-goods-rdb-follower
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-goods-rdb
+    release: "walmart-goods"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-goods-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-goods-rdb
+    chart: rdb-1.0.0
+    release: "walmart-goods"
+
+
+spec:
+  serviceName: walmart-goods-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-goods-rdb
+      release: walmart-goods
+  template:
+    metadata:
+      labels:
+        app: walmart-goods-rdb
+        release: walmart-goods
+        role: candidate
+      annotations:
+        checksum/config: b9b57ae7b66bc6688c9fe9d887f7952debdcc2107ca1ad4c4d9ee70fd03e3bc8
+    spec:
+      serviceAccountName: walmart-goods-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-goods-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-goods-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-goods-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-goods-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-goods-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-logistics-rdb-${i}.walmart-logistics-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-logistics-rdb-${i}.walmart-logistics-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+roleRef:
+  kind: Role
+  name: walmart-logistics-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-logistics-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-logistics-rdb
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+spec:
+  ports:
+    - name: walmart-logistics-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-logistics-rdb
+    release: "walmart-logistics"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-logistics-rdb-leader
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-logistics-rdb
+    release: "walmart-logistics"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-logistics-rdb-follower
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-logistics-rdb
+    release: "walmart-logistics"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-logistics-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-logistics-rdb
+    chart: rdb-1.0.0
+    release: "walmart-logistics"
+
+
+spec:
+  serviceName: walmart-logistics-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-logistics-rdb
+      release: walmart-logistics
+  template:
+    metadata:
+      labels:
+        app: walmart-logistics-rdb
+        release: walmart-logistics
+        role: candidate
+      annotations:
+        checksum/config: 40536db356f641bfca7680323e66567ab96a74660e46e51730c65f2cf353a56a
+    spec:
+      serviceAccountName: walmart-logistics-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-logistics-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-logistics-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-logistics-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-logistics-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-logistics-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-notification-rd-${i}.walmart-notification-rd.walmart-6g:8801"
+      else
+        echo -n ",walmart-notification-rd-${i}.walmart-notification-rd.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+roleRef:
+  kind: Role
+  name: walmart-notification-rd
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-notification-rd
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-notification-rd
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+spec:
+  ports:
+    - name: walmart-notification-rd
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-notification-rd
+    release: "walmart-notification"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-notification-rd-leader
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-notification-rd
+    release: "walmart-notification"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-notification-rd-follower
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-notification-rd
+    release: "walmart-notification"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-notification-rd
+  namespace: walmart-6g
+  labels:
+    app: walmart-notification-rd
+    chart: rdb-1.0.0
+    release: "walmart-notification"
+
+
+spec:
+  serviceName: walmart-notification-rd
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-notification-rd
+      release: walmart-notification
+  template:
+    metadata:
+      labels:
+        app: walmart-notification-rd
+        release: walmart-notification
+        role: candidate
+      annotations:
+        checksum/config: ac0681f7b7e54338b6d3676ef259606128e807c2623cb890e096af1c52c48692
+    spec:
+      serviceAccountName: walmart-notification-rd
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-notification-rd
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-notification-rd
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-notification-rd
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-notification-rd.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-notification-rd
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-order-rdb-${i}.walmart-order-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-order-rdb-${i}.walmart-order-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+roleRef:
+  kind: Role
+  name: walmart-order-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-order-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-order-rdb
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+spec:
+  ports:
+    - name: walmart-order-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-order-rdb
+    release: "walmart-order"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-order-rdb-leader
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-order-rdb
+    release: "walmart-order"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-order-rdb-follower
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-order-rdb
+    release: "walmart-order"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-order-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-order-rdb
+    chart: rdb-1.0.0
+    release: "walmart-order"
+
+
+spec:
+  serviceName: walmart-order-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-order-rdb
+      release: walmart-order
+  template:
+    metadata:
+      labels:
+        app: walmart-order-rdb
+        release: walmart-order
+        role: candidate
+      annotations:
+        checksum/config: b4659c7c2a7eed6a76485b084540a9c445a4e377ac3736c7056d8f8ffe71ce7d
+    spec:
+      serviceAccountName: walmart-order-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-order-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-order-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-order-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-order-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-order-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-user-rdb-${i}.walmart-user-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-user-rdb-${i}.walmart-user-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+roleRef:
+  kind: Role
+  name: walmart-user-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-user-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-user-rdb
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+spec:
+  ports:
+    - name: walmart-user-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-user-rdb
+    release: "walmart-user"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-user-rdb-leader
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-user-rdb
+    release: "walmart-user"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-user-rdb-follower
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-user-rdb
+    release: "walmart-user"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-user-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-user-rdb
+    chart: rdb-1.0.0
+    release: "walmart-user"
+
+
+spec:
+  serviceName: walmart-user-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-user-rdb
+      release: walmart-user
+  template:
+    metadata:
+      labels:
+        app: walmart-user-rdb
+        release: walmart-user
+        role: candidate
+      annotations:
+        checksum/config: 211d4322fe5efc6e38f3dcbeeb7a110b77ddc0f143d2d8841d61c409ed17c195
+    spec:
+      serviceAccountName: walmart-user-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-user-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-user-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-user-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-user-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-user-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+---
+# Source: rdb/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+---
+# Source: rdb/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+type: Opaque
+data:
+  mysql-password: "U2l4XzZnMTIz"
+  mysql-replication-password: "UmVwbF8xMjM="
+---
+# Source: rdb/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+data:
+  node.cnf: |
+    [mysqld]
+    default_storage_engine=InnoDB
+    max_connections=65535
+  server-id.cnf: |
+    [mysqld]
+    server-id=@@SERVER_ID@@
+  create-peers.sh: |
+    #!/bin/sh
+    set -eu
+    i=0
+    while [ $i -lt 3 ]
+    do
+      if [ $i = 0 ]
+      then
+        echo -n "walmart-wallet-rdb-${i}.walmart-wallet-rdb.walmart-6g:8801"
+      else
+        echo -n ",walmart-wallet-rdb-${i}.walmart-wallet-rdb.walmart-6g:8801"
+      fi
+      i=$((i+1))
+    done
+  leader-start.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "leader"}]'
+  leader-stop.sh: |
+    #!/usr/bin/env bash
+    curl -X PATCH -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/json-patch+json" \
+    --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_PORT_443_TCP_PORT/api/v1/namespaces/walmart-6g/pods/$HOSTNAME \
+    -d '[{"op": "replace", "path": "/metadata/labels/role", "value": "follower"}]'
+---
+# Source: rdb/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+---
+# Source: rdb/templates/rbac.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+roleRef:
+  kind: Role
+  name: walmart-wallet-rdb
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: walmart-wallet-rdb
+---
+# Source: rdb/templates/service.yaml
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-wallet-rdb
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+spec:
+  ports:
+    - name: walmart-wallet-rdb
+      port: 3306
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: walmart-wallet-rdb
+    release: "walmart-wallet"
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for writes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-wallet-rdb-leader
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+  selector:
+    app: walmart-wallet-rdb
+    release: "walmart-wallet"
+    role: leader
+---
+# Source: rdb/templates/service.yaml
+# Client service for connecting to any MySQL instance for reads.
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-wallet-rdb-follower
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+spec:
+  type: NodePort
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      #
+  selector:
+    app: walmart-wallet-rdb
+    release: "walmart-wallet"
+    role: follower
+---
+# Source: rdb/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: walmart-wallet-rdb
+  namespace: walmart-6g
+  labels:
+    app: walmart-wallet-rdb
+    chart: rdb-1.0.0
+    release: "walmart-wallet"
+
+
+spec:
+  serviceName: walmart-wallet-rdb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-wallet-rdb
+      release: walmart-wallet
+  template:
+    metadata:
+      labels:
+        app: walmart-wallet-rdb
+        release: walmart-wallet
+        role: candidate
+      annotations:
+        checksum/config: bf8c152acd876f84716ecc65fdc1dbe577766ac56aca8e26292b1e25cffc1e73
+    spec:
+      serviceAccountName: walmart-wallet-rdb
+      initContainers:
+        - name: init-mysql
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command: ['sh','-c']
+          args:
+            - |
+              # Generate mysql server-id from pod ordinal index.
+              ordinal=$(echo $(hostname) | tr -cd "[0-9]")
+              # Copy server-id.conf adding offset to avoid reserved server-id=0 value.
+              cat /mnt/config-map/server-id.cnf | sed s/@@SERVER_ID@@/$((100 + $ordinal))/g > /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to config mount.
+              cp -f /mnt/config-map/node.cnf /mnt/conf.d/
+              cp -f /mnt/config-map/*.sh /mnt/scripts/
+              chmod +x /mnt/scripts/*
+              # remove lost+found.
+              rm -rf /mnt/data/lost+found
+          volumeMounts:
+            - name: conf
+              mountPath: /mnt/conf.d
+            - name: scripts
+              mountPath: /mnt/scripts
+            - name: config-map
+              mountPath: /mnt/config-map
+            - name: data
+              mountPath: /mnt/data
+      containers:
+        - name: mysql
+          image: "radondb/percona:5.7.34"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-wallet-rdb
+                  key: mysql-replication-password
+            - name: MYSQL_DATABASE
+              value: "walmart-6g"
+            - name: MYSQL_USER
+              value: "six"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-wallet-rdb
+                  key: mysql-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+            - name: logs
+              mountPath: /var/log/mysql
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -uroot
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysql -uroot -e "SELECT 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: xenon
+          image: "radondb/xenon:1.1.5-helm"
+          imagePullPolicy: "IfNotPresent"
+          lifecycle:
+            postStart:
+              exec:
+                command: ['sh', '-c', 'until (xenoncli xenon ping && xenoncli cluster add "$(/scripts/create-peers.sh)") > /dev/null 2>&1; do sleep 2; done']
+          resources:
+            {}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          env:
+            - name: MYSQL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: walmart-wallet-rdb
+                  key: mysql-replication-password
+            - name: POD_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOST
+              value: $(POD_HOSTNAME).walmart-wallet-rdb.walmart-6g
+            - name: LEADER_START_CMD
+              value: "/scripts/leader-start.sh"
+            - name: LEADER_STOP_CMD
+              value: "/scripts/leader-stop.sh"
+            - name: Master_SysVars
+              value: "sync_binlog=default;innodb_flush_log_at_trx_commit=default"
+            - name: Slave_SysVars
+              value: "sync_binlog=1000;innodb_flush_log_at_trx_commit=1"
+          ports:
+            - name: xenon
+              containerPort: 8801
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - xenon
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "xenoncli xenon ping"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+        - name: slowlog
+          image: "busybox:1.32"
+          imagePullPolicy: "IfNotPresent"
+          resources:
+            {}
+          command:
+            - "tail"
+            - "-f"
+            - "/logs/mysql-slow.log"
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: scripts
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config-map
+          configMap:
+            name: walmart-wallet-rdb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"
+

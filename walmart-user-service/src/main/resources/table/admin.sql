@@ -1,0 +1,1 @@
+INSERT ignore into user (id,name,pwd,role,email,phone_num,address) values (md5(FLOOR(RAND()*1000)),'admin','21232f297a57a5a743894a0e4a801fc3',1,'admin@126.com',666666666,'上海幼儿园');

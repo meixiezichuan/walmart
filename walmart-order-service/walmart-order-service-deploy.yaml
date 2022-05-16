@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-order-service
+  labels:
+    app: walmart-order-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-order-service
+  template:
+    metadata:
+      labels:
+        app: walmart-order-service
+    spec:
+      containers:
+        - name: walmart-order-service
+          image: meixie/walmart-order-service:0.0.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-order-config
+          ports:
+            - containerPort: 8580
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-order-service
+spec:
+  ports:
+    - port: 8580
+      targetPort: 8580
+  selector:
+    app: walmart-order-service

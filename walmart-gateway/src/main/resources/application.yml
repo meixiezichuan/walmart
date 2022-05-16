@@ -1,0 +1,74 @@
+spring:
+  application:
+    name: gateway
+  datasource:
+    driver-class-name: ${mysq.driver-class-name}
+    username: ${mysq.username}
+    password: ${mysq.password}
+    url: ${mysq.url}
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: user-service
+          uri: http://${USER_SERVICE_HOST}:${USER_SERVICE_PORT}
+          predicates:
+            - Path=/user/**
+          filters:
+            - RewritePath=/user(?<segment>/?.*), /api/v1/user/$\{segment}
+        - id: goods-service
+          uri: http://${GOODS_SERVICE_HOST}:${GOODS_SERVICE_PORT}
+          predicates:
+            - Path=/goods/**
+          filters:
+            - RewritePath=/goods(?<segment>/?.*), /api/v1/goods/$\{segment}
+        - id: order-service
+          uri: http://${ORDER_SERVICE_HOST}:${ORDER_SERVICE_PORT}
+          predicates:
+            - Path=/order/**
+          filters:
+            - RewritePath=/order(?<segment>/?.*), /api/v1/order/$\{segment}
+        - id: store-service
+          uri: http://http://${GOODS_SERVICE_HOST}:${GOODS_SERVICE_PORT}
+          predicates:
+            - Path=/store/**
+          filters:
+            - RewritePath=/store(?<segment>/?.*), /api/v1/store/$\{segment}
+        - id: cart-serevice
+          uri: http://${CART_SERVICE_HOST}:${CART_SERVICE_PORT}
+          predicates:
+            - Path=/cart/**
+          filters:
+            - RewritePath=/cart(?<segment>/?.*), /api/v1/cart/$\{segment}
+        - id: wallet-serevice
+          uri: http://${WALLET_SERVICE_HOST}:${WALLET_SERVICE_PORT}
+          predicates:
+            - Path=/wallet/**
+          filters:
+            - RewritePath=/wallet(?<segment>/?.*), /api/v1/wallet/$\{segment}
+        - id: notification-serevice
+          uri: http://${NOTIFICATION_SERVICE_HOST}:${NOTIFICATION_SERVICE_PORT}
+          predicates:
+            - Path=/notification/**
+          filters:
+            - RewritePath=/notification(?<segment>/?.*), /api/v1/notification/$\{segment}
+        - id: logistics-serevice
+          uri: http://${LOGISTICS_SERVICE_HOST}:${LOGISTICS_SERVICE_PORT}
+          predicates:
+            - Path=/logistics_company/**
+          filters:
+            - RewritePath=/logistics_company(?<segment>/?.*), /api/v1/logistics_company/$\{segment}
+  main:
+    web-application-type: reactive
+server:
+  port: 8080
+
+user-service:
+  uri: http://${USER_SERVICE_HOST}:${USER_SERVICE_PORT}
+
+# mybatis-plus设置
+mybatis-plus:
+  mapper-locations: classpath:Mapper/*.xml  #mapper.xml文件位置，如果没有映射文件，请注释掉。

@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-user-service
+  labels:
+    app: walmart-user-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-user-service
+  template:
+    metadata:
+      labels:
+        app: walmart-user-service
+    spec:
+      containers:
+        - name: walmart-user-service
+          image: meixie/walmart-user-service:0.0.3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-user-config
+          ports:
+            - containerPort: 8680
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-user-service
+spec:
+  ports:
+    - port: 8680
+      targetPort: 8680
+  selector:
+    app: walmart-user-service

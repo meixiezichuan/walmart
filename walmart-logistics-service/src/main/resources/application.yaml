@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: walmart-logistics-service
+  datasource:
+    password: ${mysql.password}
+    url: ${mysql.url}
+    driver-class-name: ${mysql.driver-class-name}
+    username: ${mysql.username}
+server:
+  port: ${LOGISTICS_SERVICE_PORT}
+
+mybatis-plus:
+  mapper-locations: classpath*:com/gitee/sunchenbin/mybatis/actable/mapping/*/*.xml
+
+actable:
+  table:
+    auto: update
+  model:
+    pack: com.walmart_6g.walmartLogisticsService.entity
+  database:
+    type: mysql

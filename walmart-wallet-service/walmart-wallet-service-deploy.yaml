@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-wallet-service
+  labels:
+    app: walmart-wallet-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-wallet-service
+  template:
+    metadata:
+      labels:
+        app: walmart-wallet-service
+    spec:
+      containers:
+        - name: walmart-wallet-service
+          image: meixie/walmart-wallet-service:0.0.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-wallet-config
+          ports:
+            - containerPort: 8685
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-wallet-service
+spec:
+  ports:
+    - port: 8685
+      targetPort: 8685
+  selector:
+    app: walmart-wallet-service

@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: walmart-notification-service
+  datasource:
+    password: ${mysql.password}
+    url: ${mysql.url}
+    driver-class-name: ${mysql.driver-class-name}
+    username: ${mysql.username}
+  rabbitmq:
+    host: ${rabbitmq.host}
+    username: ${rabbitmq.username}
+    password: ${rabbitmq.password}
+    port: 5672
+server:
+  port: ${NOTIFICATION_SERVICE_PORT}
+
+user-service:
+  uri: http://${USER_SERVICE_HOST}:${USER_SERVICE_PORT}
+
+mybatis-plus:
+  mapper-locations: classpath*:com/gitee/sunchenbin/mybatis/actable/mapping/*/*.xml
+
+actable:
+  table:
+    auto: update
+  model:
+    pack: com.walmart_6g.walmartNotificationService.entity
+  database:
+    type: mysql

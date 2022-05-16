@@ -1,0 +1,385 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-gateway-service
+  labels:
+    app: walmart-gateway-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-gateway-service
+  template:
+    metadata:
+      labels:
+        app: walmart-gateway-service
+    spec:
+      containers:
+        - name: walmart-gateway-service
+          image: meixie/walmart-gateway:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-gateway-service
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 32002
+  selector:
+    app: walmart-gateway-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-cart-service
+  labels:
+    app: walmart-cart-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-cart-service
+  template:
+    metadata:
+      labels:
+        app: walmart-cart-service
+    spec:
+      containers:
+        - name: walmart-cart-service
+          image: meixie/walmart-cart-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-cart-config
+          ports:
+            - containerPort: 8684
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-cart-service
+spec:
+  ports:
+    - port: 8684
+      targetPort: 8684
+  selector:
+    app: walmart-cart-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-goods-service
+  labels:
+    app: walmart-goods-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-goods-service
+  template:
+    metadata:
+      labels:
+        app: walmart-goods-service
+    spec:
+      containers:
+        - name: walmart-goods-service
+          image: meixie/walmart-goods-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-goods-config
+          ports:
+            - containerPort: 8681
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-goods-service
+spec:
+  ports:
+    - port: 8681
+      targetPort: 8681
+  selector:
+    app: walmart-goods-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-logistics-service
+  labels:
+    app: walmart-logistics-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-logistics-service
+  template:
+    metadata:
+      labels:
+        app: walmart-logistics-service
+    spec:
+      containers:
+        - name: walmart-logistics-service
+          image: meixie/walmart-logistics-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-logistics-config
+          ports:
+            - containerPort: 8530
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-logistics-service
+spec:
+  ports:
+    - port: 8530
+      targetPort: 8530
+  selector:
+    app: walmart-logistics-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-notification-service
+  labels:
+    app: walmart-notification-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-notification-service
+  template:
+    metadata:
+      labels:
+        app: walmart-notification-service
+    spec:
+      containers:
+        - name: walmart-notification-service
+          image: meixie/walmart-notification-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-notification-config
+            - configMapRef:
+                name: walmart-rabbitmq-config
+          ports:
+            - containerPort: 8590
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-notification-service
+spec:
+  ports:
+    - port: 8590
+      targetPort: 8590
+  selector:
+    app: walmart-notification-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-order-service
+  labels:
+    app: walmart-order-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-order-service
+  template:
+    metadata:
+      labels:
+        app: walmart-order-service
+    spec:
+      containers:
+        - name: walmart-order-service
+          image: meixie/walmart-order-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-order-config
+            - configMapRef:
+                name: walmart-rabbitmq-config
+          ports:
+            - containerPort: 8580
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-order-service
+spec:
+  ports:
+    - port: 8580
+      targetPort: 8580
+  selector:
+    app: walmart-order-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-user-service
+  labels:
+    app: walmart-user-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-user-service
+  template:
+    metadata:
+      labels:
+        app: walmart-user-service
+    spec:
+      containers:
+        - name: walmart-user-service
+          image: meixie/walmart-user-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-user-config
+          ports:
+            - containerPort: 8680
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-user-service
+spec:
+  ports:
+    - port: 8680
+      targetPort: 8680
+  selector:
+    app: walmart-user-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walmart-wallet-service
+  labels:
+    app: walmart-wallet-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: walmart-wallet-service
+  template:
+    metadata:
+      labels:
+        app: walmart-wallet-service
+    spec:
+      containers:
+        - name: walmart-wallet-service
+          image: meixie/walmart-wallet-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          envFrom:
+            - configMapRef:
+                name: walmart-global-config
+            - configMapRef:
+                name: walmart-wallet-config
+          ports:
+            - containerPort: 8685
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walmart-wallet-service
+spec:
+  ports:
+    - port: 8685
+      targetPort: 8685
+  selector:
+    app: walmart-wallet-service

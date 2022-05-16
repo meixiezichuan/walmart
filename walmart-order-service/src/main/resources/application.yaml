@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: walmart-order-service
+  datasource:
+    password: ${mysql.password}
+    url: ${mysql.url}
+    driver-class-name: ${mysql.driver-class-name}
+    username: ${mysql.username}
+  rabbitmq:
+    host: ${rabbitmq.host}
+    username: ${rabbitmq.username}
+    password: ${rabbitmq.password}
+    port: 5672
+server:
+  port: ${ORDER_SERVICE_PORT}
+
+user-service:
+  uri: http://${USER_SERVICE_HOST}:${USER_SERVICE_PORT}
+goods-service:
+  uri: http://${GOODS_SERVICE_HOST}:${GOODS_SERVICE_PORT}
+wallet-service:
+  uri: http://${WALLET_SERVICE_HOST}:${WALLET_SERVICE_PORT}
+logistics-service:
+  uri: http://${LOGISTICS_SERVICE_HOST}:${LOGISTICS_SERVICE_PORT}
+
+# mybatis-plus设置
+mybatis-plus:
+  #mapper-locations: classpath:Mapper/*.xml  #mapper.xml文件位置，如果没有映射文件，请注释掉。
+  mapper-locations: classpath*:com/gitee/sunchenbin/mybatis/actable/mapping/*/*.xml, classpath:mapper/*Mapper.xml
+
+  # actable的配置信息
+actable:
+  table:
+    auto: update
+  model:
+    pack: com.walmart_6g.walmartOrderService.entity
+  database:
+    type: mysql

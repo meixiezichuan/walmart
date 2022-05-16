@@ -1,0 +1,73 @@
+version: "3.3"
+
+services:
+  walmart-frontend:
+    image: ${IMG_REPO}/walmart-dashboard:${IMG_TAG}
+    restart: always
+    ports:
+      - 8080:80
+    networks:
+      - my-network
+
+  eureka-server:
+    image: ${IMG_REPO}/walmart-eureka-server:${IMG_TAG}
+    restart: always
+    ports:
+      - 8761:8761
+    networks:
+      - my-network
+
+  walmart-goods-service:
+    image: ${IMG_REPO}/walmart-goods-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 8681:8681
+    depends_on:
+      - eureka-server
+    networks:
+      - my-network
+
+  walmart-user-service:
+    image: ${IMG_REPO}/walmart-user-service:${IMG_TAG}
+    restart: always
+    depends_on:
+      - eureka-server
+    ports:
+      - 8680:8680
+    networks:
+      - my-network
+
+  walmart-cart-service:
+    image: ${IMG_REPO}/walmart-cart-service:${IMG_TAG}
+    restart: always
+    depends_on:
+      - eureka-server
+    ports:
+      - 8684:8684
+    networks:
+      - my-network
+
+  walmart-notification-service:
+    image: ${IMG_REPO}/walmart-notification-service:${IMG_TAG}
+    restart: always
+    depends_on:
+      - eureka-server
+    ports:
+      - 8590:8590
+    networks:
+      - my-network
+
+  walmart-logistics-service:
+    image: ${IMG_REPO}/walmart-logistics-service:${IMG_TAG}
+    restart: always
+    depends_on:
+      - eureka-server
+    ports:
+      - 8530:8530
+    networks:
+      - my-network
+
+networks:
+  my-network:
+    # driver: overlay
+    driver: bridge
