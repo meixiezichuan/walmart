@@ -65,18 +65,6 @@
 
 - 4、在CloudIDE启动：在cloudide的右下角Termial中的命令行中，输入启动命名：mvn spring-boot:run ,验证是否能在IDE容器中启动成功，启动成功后在IDE左下角有一个“预览”功能，可以把云端IDE启动的服务在本地浏览器中访问到，则说明CloudIDE配置是OK的。
 
-## 人员介绍
-- meixiezichuan@163.com -- 崔云娜（组长）
-- ztk1996 -- 周彤
-- 程千骞 -- 程千骞
-- shulecture -- 陈怡如
-- 捕梦人31415 -- 王永立
-- zoubaihan -- 邹佰翰
-- yiduyton -- 杨天庸
-- wavender -- 王尚
-- xmu杨鸿 -- 杨鸿
-- 周重zzaly -- 周重
--  刘卓然 -- 刘卓然
 
 ## 快速启动
 
